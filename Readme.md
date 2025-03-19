@@ -73,11 +73,10 @@ A temperature detection and PID heating control system extracted from Marlin fir
 2. 设置目标温度和 PID 参数：
 
    ```cpp
-   hotend_info_t hotend;
-   hotend.target = 200;      // Target temperature 目标温度
-   hotend.pid.Kp = 12.5;    // Proportional gain 比例系数
-   hotend.pid.Ki = 0.8;     // Integral gain 积分系数
-   hotend.pid.Kd = 45.0;    // Derivative gain 微分系数
+   TARGET_TEMP 45           // Target temperature 目标温度
+   DEFAULT_Kp  22.20        // Proportional gain 比例系数
+   DEFAULT_Ki   1.08        // Integral gain 积分系数
+   DEFAULT_Kd 114.00        // Derivative gain 微分系数
    ```
 
 ## PID Tuning PID 调参
