@@ -530,11 +530,15 @@ void temperature_init()
   adc_enable(TEMP_0_PIN);
   HAL_timer_start(MF_TIMER_TEMP, TEMP_TIMER_FREQUENCY);
   ENABLE_TEMPERATURE_INTERRUPT();
-  Serial1.print("Notset, TargetHotend(0): ");
-  Serial1.println(temperature_degTargetHotend(0));
-  temperature_setTargetHotend(45, 0);
-  Serial1.print("Set, TargetHotend(0): ");
-  Serial1.println(temperature_degTargetHotend(0));
+  #if ENABLED(DEBUG)
+    Serial1.print("Notset, TargetHotend(0): ");
+    Serial1.println(temperature_degTargetHotend(0));
+  #endif
+    temperature_setTargetHotend(TARGET_TEMP, 0);
+  #if ENABLED(DEBUG)
+    Serial1.print("Set, TargetHotend(0): ");
+    Serial1.println(temperature_degTargetHotend(0));
+  #endif
 
 }
 
@@ -542,11 +546,13 @@ void temperature_init()
 void temperature_task()
 {
   if (!temperature_updateTemperaturesIfReady()) {
-    Serial1.print("temp_hotend[HOTENDS].celsius() : ");
-    Serial1.println(temp_hotend[0].celsius);
-    // Serial1.print("temp_hotend[HOTENDS].raw() : ");
-    // Serial1.println(temp_hotend[0].getraw() * THERMISTOR_RAW_SCALE);
-    return; // Will also reset the watchdog if temperatures are ready
+    #if ENABLED(DEBUG)
+      Serial1.print("temp_hotend[HOTENDS].celsius() : ");
+      Serial1.println(temp_hotend[0].celsius);
+      // Serial1.print("temp_hotend[HOTENDS].raw() : ");
+      // Serial1.println(temp_hotend[0].getraw() * THERMISTOR_RAW_SCALE);
+    #endif
+      return; // Will also reset the watchdog if temperatures are ready
   }
   const millis_t ms = millis();
 

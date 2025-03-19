@@ -5,41 +5,12 @@
 #include "timers.h"
 #include "millis_t.h"
 // #include "main.h"
+#include "Configuration.h"
 
-
-
-//
-// Heaters / Fans
-//
-// #define HEATER_0_PIN PA2 // HOTEND MOSFET
-#define HEATER_0_PIN PC13 // HOTEND LCD Test
-#if (HEATER_0_PIN == PC13)
-  #define HEATER_0_INVERTING
-#endif
 
 void temperature_reset();
 void temperature_init();
 void temperature_task();
-
-/**
- * Temperature Control
- *
- *  (NONE) : Bang-bang heating
- * PIDTEMP : PID temperature control (~4.1K)
- * MPCTEMP : Predictive Model temperature control. (~1.8K without auto-tune)
- */
-#define PIDTEMP           // See the PID Tuning Guide at https://reprap.org/wiki/PID_Tuning
-//#define MPCTEMP         // See https://marlinfw.org/docs/features/model_predictive_control.html
-
-#define PID_MAX  255      // Limit hotend current while PID is active (see PID_FUNCTIONAL_RANGE below); 255=full current
-#define PID_K1     0.95   // Smoothing factor within any PID loop
-
-
-// put function declarations here:
-// int myFunction(int, int);
-#define TEMP_0_PIN PB1 // Analog Input (HOTEND thermistor)
-
-#define TEMP_SENSOR_0 11
 
 #if TEMP_SENSOR_0 > 0
   #define TEMP_SENSOR_0_IS_THERMISTOR 1
@@ -605,8 +576,6 @@ hotend_pid_t;
 
 typedef struct PIDHeaterInfo<hotend_pid_t> hotend_info_t;
 
-#define HEATER_0_MAXTEMP 275
-
 static hotend_info_t temp_hotend[HOTENDS];
 static constexpr celsius_t hotend_maxtemp[HOTENDS] = ARRAY_BY_HOTENDS(HEATER_0_MAXTEMP, HEATER_1_MAXTEMP, HEATER_2_MAXTEMP, HEATER_3_MAXTEMP, HEATER_4_MAXTEMP, HEATER_5_MAXTEMP, HEATER_6_MAXTEMP, HEATER_7_MAXTEMP);
 static celsius_t hotend_max_target(const uint8_t e) { return hotend_maxtemp[e] - (HOTEND_OVERSHOOT); }
@@ -642,11 +611,6 @@ static celsius_t hotend_max_target(const uint8_t e) { return hotend_maxtemp[e] -
 #else
   #define WRITE_HEATER_0(v) WRITE_HEATER_0P(v)
 #endif
-
-
-#define DEFAULT_Kp  22.20
-#define DEFAULT_Ki   1.08
-#define DEFAULT_Kd 114.00
 
 
 static celsius_t temperature_degTargetHotend(const uint8_t E_NAME) {
