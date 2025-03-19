@@ -51,7 +51,7 @@ A temperature detection and PID heating control system extracted from Marlin fir
 1. 克隆此仓库
 
    ```bash
-   git clone https://github.com/staff1010/stm32-temp-control.git
+   git clone https://github.com/staff1010/MarlinTempControl.git
    ```
 
 2. Open the project in PlatformIO
