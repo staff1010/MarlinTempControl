@@ -39,11 +39,13 @@ enum ADCSensorState : char
     StartupDelay  // Startup, delay initial temp reading a tiny bit so the hardware can settle
 };
 
+// 读取一次ADC时的至少ISR()中断循环次数，即读取一次ADC引脚数值，到存入acc，至少花费 MIN_ADC_ISR_LOOPS 个中断，乘以 16 （采样次数）则可以算出采样完毕的总时间
 // Minimum number of Temperature::ISR loops between sensor readings.
 // Multiplied by 16 (OVERSAMPLENR) to obtain the total time to
 // get all oversampled sensor readings
 #define MIN_ADC_ISR_LOOPS 10
 
+// 实际的读取一次ADC值所使用的中断次数，默认为上边的值
 #define ACTUAL_ADC_SAMPLES _MAX(int(MIN_ADC_ISR_LOOPS), int(SensorsReady))
 
 //
@@ -158,6 +160,7 @@ static bool temperature_updateTemperaturesIfReady() {
 #if (HAL_ADC_RANGE) * (OVERSAMPLENR) > 1 << 16
   #error "MAX_RAW_THERMISTOR_VALUE is too large for uint16_t. Reduce OVERSAMPLENR or HAL_ADC_RESOLUTION."
 #endif
+// 根据ADC读取分辨率设置最大的ADC值，例如此处为12位采样精度，(2^12 - 1) * 16 (采样次数)
 #define MAX_RAW_THERMISTOR_VALUE (uint16_t(HAL_ADC_RANGE) * (OVERSAMPLENR) - 1)
 
 #define OV_SCALE(N) float(N)
@@ -205,12 +208,10 @@ static void watchdog_refresh() IF_DISABLED(USE_WATCHDOG, {});
 
 
 #ifdef ADC_RESOLUTION
-#define HAL_ADC_RESOLUTION ADC_RESOLUTION
+  #define HAL_ADC_RESOLUTION ADC_RESOLUTION
 #else
-#define HAL_ADC_RESOLUTION 12
+  #define HAL_ADC_RESOLUTION 12
 #endif
-
-#define OVERSAMPLENR 16
 
 // temperature_raw_temps_ready = false;
 
@@ -486,12 +487,21 @@ typedef struct { float p, i, d, c, f; } raw_pidcf_t;
 
 #if HAS_PID_HEATING
 
+  // PID_K2是低通滤波系数，这避免了"微分冲击"问题（当目标温度突变时）
+  // 新微分值 = 旧微分值 * (1-PID_K2) + 原始微分值 * PID_K2
   #define PID_K2 (1.0f - float(PID_K1))
+
+  // 采样时间间隔，即每次PID计算的时间间隔：算出一次温度值（采样次数 * 每次采样花费的中断次数） 除以 中断频率
   #define PID_dT ((OVERSAMPLENR * float(ACTUAL_ADC_SAMPLES)) / (TEMP_TIMER_FREQUENCY))
 
+  // 在PID控制理论中，积分项(I)和微分项(D)都与时间相关：
+  // 积分是误差随时间的累积
+  // 微分是误差随时间的变化率
   // Apply the scale factors to the PID values
+  // 将积分项乘以时间间隔
   #define scalePID_i(i)   ( float(i) * PID_dT )
   #define unscalePID_i(i) ( float(i) / PID_dT )
+  // 将微分项除以时间间隔
   #define scalePID_d(d)   ( float(d) / PID_dT )
   #define unscalePID_d(d) ( float(d) * PID_dT )
 
@@ -538,6 +548,7 @@ typedef struct { float p, i, d, c, f; } raw_pidcf_t;
 
       float get_extrusion_scale_output(const bool, const int32_t, const float, const int16_t) { return 0; }
 
+      // 通过 PID 计算 PWM 占空比，通过pid_reset来判断是否重置PWM值
       float get_pid_output(const float target, const float current) {
         const float pid_error = target - current;
         if (!target || pid_error < -(PID_FUNCTIONAL_RANGE)) {
@@ -554,12 +565,28 @@ typedef struct { float p, i, d, c, f; } raw_pidcf_t;
           temp_iState = 0.0;
           work_d = 0.0;
         }
-
+        // 防止积分饱和（integral windup）的设计
+        /*
+          PID总输出 = P + I + D + MIN_POW
+          我们希望总输出不超过 MAX_POW
+          则：I ≤ MAX_POW - P - D - MIN_POW
+          保守估计，I ≤ MAX_POW - MIN_POW
+          因为 I = Ki * temp_iState
+          所以 Ki * temp_iState ≤ MAX_POW - MIN_POW
+          解得 temp_iState ≤ (MAX_POW - MIN_POW) / Ki
+          即 temp_iState ≤ MAX_POW/Ki - MIN_POW
+        */
         const float max_power_over_i_gain = float(MAX_POW) / Ki - float(MIN_POW);
         temp_iState = constrain(temp_iState + pid_error, 0, max_power_over_i_gain);
 
         work_p = Kp * pid_error;
         work_i = Ki * temp_iState;
+        // 一阶低通滤波： 展开为 work_d = (1 - PID_K2) * work_d + PID_K2 * (Kd * (temp_dState - current)
+        // 新值 = 旧值的权重部分 + 当前输入的权重部分
+        // 目前PID_K2为0.05，即 微分项更新 = 95%旧值 + 5%新计算值
+        // 温度突变时，微分响应会缓慢上升而非瞬间跳变
+        // 标准公式：D = Kd * (当前误差 - 上次误差) / dt
+        // Marlin则使用温度变化率而非误差变化率：Kd * (temp_dState - current)
         work_d = work_d + PID_K2 * (Kd * (temp_dState - current) - work_d);
 
         temp_dState = current;
@@ -612,6 +639,24 @@ static celsius_t hotend_max_target(const uint8_t e) { return hotend_maxtemp[e] -
   #define WRITE_HEATER_0(v) WRITE_HEATER_0P(v)
 #endif
 
+//high level conversion routines, for use outside of temperature.cpp
+//inline so that there is no performance decrease.
+//deg=degreeCelsius
+
+static celsius_float_t temperature_degHotend(const uint8_t E_NAME) {
+  return TERN0(HAS_HOTEND, temp_hotend[HOTEND_INDEX].celsius);
+}
+
+static celsius_t temperature_wholeDegHotend(const uint8_t E_NAME) {
+  return TERN0(HAS_HOTEND, static_cast<celsius_t>(temp_hotend[HOTEND_INDEX].celsius + 0.5f));
+}
+
+#if ENABLED(SHOW_TEMP_ADC_VALUES)
+  static raw_adc_t temperature_rawHotendTemp(const uint8_t E_NAME) {
+    return TERN0(HAS_HOTEND, temp_hotend[HOTEND_INDEX].getraw());
+  }
+#endif
+
 
 static celsius_t temperature_degTargetHotend(const uint8_t E_NAME) {
   return TERN0(HAS_HOTEND, temp_hotend[HOTEND_INDEX].target);
@@ -637,3 +682,80 @@ static void temperature_start_watching_hotend(const uint8_t E_NAME) {
     watch_hotend[HOTEND_INDEX].restart(degHotend(HOTEND_INDEX), degTargetHotend(HOTEND_INDEX));
   #endif
 }
+
+
+/**
+ * Temperature Sensors; define what sensor(s) we have.
+ */
+
+// Temperature sensor IDs
+#define HID_NONE    -128
+#define HID_REDUNDANT -6
+#define HID_BOARD     -5
+#define HID_COOLER    -4
+#define HID_PROBE     -3
+#define HID_CHAMBER   -2
+#define HID_BED       -1
+#define HID_E0         0
+#define HID_E1         1
+#define HID_E2         2
+#define HID_E3         3
+#define HID_E4         4
+#define HID_E5         5
+#define HID_E6         6
+#define HID_E7         7
+
+// Element identifiers. Positive values are hotends. Negative values are other heaters or coolers.
+typedef enum : int_fast8_t {
+  H_REDUNDANT = HID_REDUNDANT,
+  H_COOLER = HID_COOLER,
+  H_PROBE = HID_PROBE,
+  H_BOARD = HID_BOARD,
+  H_CHAMBER = HID_CHAMBER,
+  H_BED = HID_BED,
+  H_E0 = HID_E0, H_E1, H_E2, H_E3, H_E4, H_E5, H_E6, H_E7,
+  H_NONE = -128
+} heater_id_t;
+
+
+//
+// On AVR pointers are only 2 bytes so use 'const float &' for 'const float'
+//
+#ifdef __AVR__
+  typedef const float & const_float_t;
+#else
+  typedef const float const_float_t;
+#endif
+typedef const_float_t const_feedRate_t;
+typedef const_float_t const_celsius_float_t;
+
+
+    /**
+     * Perform auto-tuning for hotend or bed in response to M303
+     */
+    #if HAS_PID_HEATING
+
+      #if HAS_PID_DEBUG
+        static bool pid_debug_flag;
+      #endif
+
+      static void temperature_PID_autotune(const celsius_t target, const heater_id_t heater_id, const int8_t ncycles, const bool set_result=false);
+
+      // Update the temp manager when PID values change
+      #if ENABLED(PIDTEMP)
+        static void updatePID() { HOTEND_LOOP() temp_hotend[e].pid.reset(); }
+        static void setPID(const uint8_t hotend, const_float_t p, const_float_t i, const_float_t d) {
+          #if ENABLED(PID_PARAMS_PER_HOTEND)
+            temp_hotend[hotend].pid.set(p, i, d);
+          #else
+            HOTEND_LOOP() temp_hotend[e].pid.set(p, i, d);
+          #endif
+          updatePID();
+        }
+      #endif
+
+    #endif // HAS_PID_HEATING
+
+#define SERIAL_ECHOPGM(V...)    NOOP
+#define SERIAL_ECHOLNPGM(V...)  NOOP
+#define LCD_MESSAGE(M)          NOOP
